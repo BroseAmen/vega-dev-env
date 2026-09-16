@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+*{margin:0;padding:0}
+html,body{width:100%;height:100%;background:#000;overflow:hidden}
+iframe{width:100%;height:100%;border:0;display:block}
+</style>
+</head>
+<body>
+<script>
+(function(){
+  var p = new URLSearchParams(location.search);
+  var id = p.get('id');
+  var ep = p.get('ep');
+  var mode = p.get('mode') || 'sub';
+  if (!id || !ep) {
+    document.body.style.color = '#fff';
+    document.body.textContent = 'Missing id or ep parameter';
+    return;
+  }
+  var url = 'https://megaplay.buzz/stream/mal/' + encodeURIComponent(id) + '/' + encodeURIComponent(ep) + '/' + encodeURIComponent(mode);
+  var iframe = document.createElement('iframe');
+  iframe.src = url;
+  iframe.allowFullscreen = true;
+  iframe.setAttribute('scrolling', 'no');
+  document.body.appendChild(iframe);
+})();
+</script>
+</body>
+</html>
