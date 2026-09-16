@@ -21,11 +21,114 @@ iframe{width:100%;height:100%;border:0;display:block}
     document.body.textContent = 'Missing id or ep parameter';
     return;
   }
+
+  function send(msg) {
+    window.ReactNativeWebView && window.ReactNativeWebView.postMessage(JSON.stringify({tag:'EMBED', msg:msg}));
+  }
+
+  send('wrapper origin=' + location.origin + ' href=' + location.href);
+
+  // === MSE / MEDIA CAPABILITY PROBE ===
+  var probe = {};
+  probe.typeofMediaSource = typeof window.MediaSource;
+  probe.mediaSourceExists = !!window.MediaSource;
+
+  if (window.MediaSource && window.MediaSource.isTypeSupported) {
+    probe.mse_mp4_baseline = window.MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E,mp4a.40.2"');
+    probe.mse_mp4_high     = window.MediaSource.isTypeSupported('video/mp4; codecs="avc1.640028,mp4a.40.2"');
+    probe.mse_webm_vp9     = window.MediaSource.isTypeSupported('video/webm; codecs="vp9,opus"');
+  } else {
+    probe.mse_mp4_baseline = 'N/A (no MediaSource)';
+    probe.mse_mp4_high     = 'N/A (no MediaSource)';
+    probe.mse_webm_vp9     = 'N/A (no MediaSource)';
+  }
+
+  var video = document.createElement('video');
+  probe.videoElementCreated = !!video;
+  probe.canPlay_hls_apple   = video.canPlayType('application/vnd.apple.mpegurl');
+  probe.canPlay_hls_x       = video.canPlayType('application/x-mpegURL');
+  probe.canPlay_mp4         = video.canPlayType('video/mp4');
+  probe.readyState          = video.readyState;
+  probe.networkState        = video.networkState;
+
+  send('=== MSE PROBE ===');
+  var keys = Object.keys(probe);
+  for (var i = 0; i < keys.length; i++) {
+    send('PROBE: ' + keys[i] + ' = ' + JSON.stringify(probe[keys[i]]));
+  }
+  send('=== END MSE PROBE ===');
+
+  // === NETWORK ACTIVITY MONITOR ===
+  var mediaRequests = [];
+  if (window.PerformanceObserver) {
+    try {
+      new PerformanceObserver(function(list) {
+        list.getEntries().forEach(function(e) {
+          if (e.entryType === 'resource') {
+            var isMedia = /\.(m3u8|mpd|ts|m4s|mp4|webm|key)(\?|$)/i.test(e.name);
+            var isMega = /megaplay\.buzz/i.test(e.name);
+            if (isMedia || isMega) {
+              var extra = '';
+              if (e.responseStatus) extra += ' status=' + e.responseStatus;
+              if (e.transferSize !== undefined) extra += ' xfer=' + e.transferSize;
+              mediaRequests.push(e.name);
+              send('NET: ' + e.initiatorType + ' ' + Math.round(e.duration) + 'ms' + extra + ' ' + e.name);
+            }
+          }
+        });
+      }).observe({entryTypes: ['resource']});
+    } catch(ex) { send('PerfObserver error: ' + ex.message); }
+  }
+
+  // === TIMED CHECKS ===
+  setTimeout(function() {
+    send('=== 5s NET CHECK ===');
+    send('media requests so far: ' + mediaRequests.length);
+    var hasM3u8 = mediaRequests.some(function(u){ return /\.m3u8/i.test(u); });
+    var hasMpd  = mediaRequests.some(function(u){ return /\.mpd/i.test(u); });
+    var hasTs   = mediaRequests.some(function(u){ return /\.ts(\?|$)/i.test(u); });
+    var hasM4s  = mediaRequests.some(function(u){ return /\.m4s/i.test(u); });
+    var hasMp4  = mediaRequests.some(function(u){ return /\.mp4/i.test(u); });
+    send('manifest: m3u8=' + hasM3u8 + ' mpd=' + hasMpd);
+    send('segments: ts=' + hasTs + ' m4s=' + hasM4s + ' mp4=' + hasMp4);
+    if (mediaRequests.length === 0) {
+      send('*** NO MEDIA REQUESTS — player has not started fetching media ***');
+    }
+  }, 5000);
+
+  setTimeout(function() {
+    send('=== 12s NET CHECK ===');
+    send('total media requests: ' + mediaRequests.length);
+    for (var j = 0; j < Math.min(mediaRequests.length, 20); j++) {
+      send('REQ[' + j + ']: ' + mediaRequests[j]);
+    }
+    if (mediaRequests.length === 0) {
+      send('*** STILL NO MEDIA REQUESTS AT 12s ***');
+      if (!window.MediaSource) {
+        send('DIAGNOSIS: No MediaSource API — HLS.js cannot function');
+      } else {
+        send('DIAGNOSIS: MediaSource exists but no media requested — player script error or getSources failure');
+      }
+    } else if (mediaRequests.some(function(u){ return /\.m3u8/i.test(u); }) && !mediaRequests.some(function(u){ return /\.(ts|m4s)/i.test(u); })) {
+      send('DIAGNOSIS: Manifest fetched but no segments — possible codec/MSE init failure');
+    }
+  }, 12000);
+
+  // === CREATE IFRAME ===
   var url = 'https://megaplay.buzz/stream/mal/' + encodeURIComponent(id) + '/' + encodeURIComponent(ep) + '/' + encodeURIComponent(mode);
+  send('creating iframe src=' + url);
   var iframe = document.createElement('iframe');
   iframe.src = url;
   iframe.allowFullscreen = true;
   iframe.setAttribute('scrolling', 'no');
+
+  iframe.addEventListener('load', function() {
+    send('iframe LOAD event');
+  });
+  iframe.addEventListener('error', function(ev) {
+    send('iframe ERROR event type=' + ev.type);
+  });
+
   document.body.appendChild(iframe);
 })();
 </script>
