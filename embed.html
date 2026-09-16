@@ -106,8 +106,9 @@ iframe{width:100%;height:100%;border:0;display:block}
     }
     if (!data || typeof data !== 'object') return;
 
+    var evtType = data.type || data.event;
     if (data.channel === 'megacloud') {
-      if (data.type === 'time') {
+      if (evtType === 'time') {
         mpEvents.time++;
         lastTimeEvent = {currentTime: data.currentTime, duration: data.duration};
         if (!firstTimeEvent) {
@@ -117,19 +118,19 @@ iframe{width:100%;height:100%;border:0;display:block}
         if (mpEvents.time % 10 === 0) {
           send('MP_EVENT: TIME x' + mpEvents.time + ' currentTime=' + data.currentTime + ' duration=' + data.duration);
         }
-      } else if (data.type === 'error') {
+      } else if (evtType === 'error') {
         mpEvents.error++;
         var errStr = JSON.stringify(data).substring(0, 300);
         mpErrors.push(errStr);
         send('MP_EVENT: *** ERROR *** ' + errStr);
-      } else if (data.type === 'complete') {
+      } else if (evtType === 'complete') {
         mpEvents.complete++;
         send('MP_EVENT: COMPLETE');
       } else {
         mpEvents.other++;
-        send('MP_EVENT: channel=megacloud type=' + data.type + ' ' + JSON.stringify(data).substring(0, 200));
+        send('MP_EVENT: channel=megacloud event=' + evtType + ' ' + JSON.stringify(data).substring(0, 200));
       }
-    } else if (data.type === 'watching-log') {
+    } else if (evtType === 'watching-log' || data.type === 'watching-log') {
       mpEvents.watchingLog++;
       if (mpEvents.watchingLog <= 3 || mpEvents.watchingLog % 10 === 0) {
         send('MP_EVENT: watching-log #' + mpEvents.watchingLog + ' currentTime=' + data.currentTime + ' duration=' + data.duration);
@@ -193,6 +194,7 @@ iframe{width:100%;height:100%;border:0;display:block}
   var iframe = document.createElement('iframe');
   iframe.src = url;
   iframe.allowFullscreen = true;
+  iframe.setAttribute('allow', 'autoplay; encrypted-media; fullscreen');
   iframe.setAttribute('scrolling', 'no');
 
   send('iframe allow="' + (iframe.getAttribute('allow') || '(none)') + '" sandbox="' + (iframe.getAttribute('sandbox') || '(none)') + '"');
