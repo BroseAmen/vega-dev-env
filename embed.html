@@ -59,6 +59,9 @@ iframe{width:100%;height:100%;border:0;display:block}
   send('=== END MSE PROBE ===');
 
   // === NETWORK ACTIVITY MONITOR ===
+  // NOTE: This PerfObserver can only see resources in THIS wrapper document,
+  // NOT inside the cross-origin MegaPlay iframe. The postMessage listener
+  // below is the primary diagnostic for MegaPlay player state.
   var mediaRequests = [];
   if (window.PerformanceObserver) {
     try {
@@ -80,39 +83,109 @@ iframe{width:100%;height:100%;border:0;display:block}
     } catch(ex) { send('PerfObserver error: ' + ex.message); }
   }
 
+  // === AUTOPLAY / PERMISSIONS PROBE ===
+  var permProbe = {};
+  permProbe.featurePolicyExists = !!document.featurePolicy;
+  if (document.featurePolicy && document.featurePolicy.allowsFeature) {
+    try { permProbe.autoplayAllowed = document.featurePolicy.allowsFeature('autoplay'); } catch(e) { permProbe.autoplayAllowed = 'error: ' + e.message; }
+    try { permProbe.encryptedMediaAllowed = document.featurePolicy.allowsFeature('encrypted-media'); } catch(e) { permProbe.encryptedMediaAllowed = 'error: ' + e.message; }
+  }
+  permProbe.permissionsPolicyExists = !!document.permissionsPolicy;
+  send('PERM_PROBE: ' + JSON.stringify(permProbe));
+
+  // === MEGAPLAY postMessage LISTENER ===
+  var mpEvents = {time:0, error:0, complete:0, watchingLog:0, other:0};
+  var firstTimeEvent = null;
+  var lastTimeEvent = null;
+  var mpErrors = [];
+
+  window.addEventListener('message', function(event) {
+    var data = event.data;
+    if (typeof data === 'string') {
+      try { data = JSON.parse(data); } catch(e) { return; }
+    }
+    if (!data || typeof data !== 'object') return;
+
+    if (data.channel === 'megacloud') {
+      if (data.type === 'time') {
+        mpEvents.time++;
+        lastTimeEvent = {currentTime: data.currentTime, duration: data.duration};
+        if (!firstTimeEvent) {
+          firstTimeEvent = Date.now();
+          send('MP_EVENT: first TIME event! currentTime=' + data.currentTime + ' duration=' + data.duration);
+        }
+        if (mpEvents.time % 10 === 0) {
+          send('MP_EVENT: TIME x' + mpEvents.time + ' currentTime=' + data.currentTime + ' duration=' + data.duration);
+        }
+      } else if (data.type === 'error') {
+        mpEvents.error++;
+        var errStr = JSON.stringify(data).substring(0, 300);
+        mpErrors.push(errStr);
+        send('MP_EVENT: *** ERROR *** ' + errStr);
+      } else if (data.type === 'complete') {
+        mpEvents.complete++;
+        send('MP_EVENT: COMPLETE');
+      } else {
+        mpEvents.other++;
+        send('MP_EVENT: channel=megacloud type=' + data.type + ' ' + JSON.stringify(data).substring(0, 200));
+      }
+    } else if (data.type === 'watching-log') {
+      mpEvents.watchingLog++;
+      if (mpEvents.watchingLog <= 3 || mpEvents.watchingLog % 10 === 0) {
+        send('MP_EVENT: watching-log #' + mpEvents.watchingLog + ' currentTime=' + data.currentTime + ' duration=' + data.duration);
+      }
+    } else {
+      send('MP_MSG: origin=' + event.origin + ' keys=' + Object.keys(data).join(',') + ' ' + JSON.stringify(data).substring(0, 200));
+    }
+  });
+  send('postMessage listener registered for MegaPlay events');
+
   // === TIMED CHECKS ===
   setTimeout(function() {
-    send('=== 5s NET CHECK ===');
-    send('media requests so far: ' + mediaRequests.length);
-    var hasM3u8 = mediaRequests.some(function(u){ return /\.m3u8/i.test(u); });
-    var hasMpd  = mediaRequests.some(function(u){ return /\.mpd/i.test(u); });
-    var hasTs   = mediaRequests.some(function(u){ return /\.ts(\?|$)/i.test(u); });
-    var hasM4s  = mediaRequests.some(function(u){ return /\.m4s/i.test(u); });
-    var hasMp4  = mediaRequests.some(function(u){ return /\.mp4/i.test(u); });
-    send('manifest: m3u8=' + hasM3u8 + ' mpd=' + hasMpd);
-    send('segments: ts=' + hasTs + ' m4s=' + hasM4s + ' mp4=' + hasMp4);
-    if (mediaRequests.length === 0) {
-      send('*** NO MEDIA REQUESTS — player has not started fetching media ***');
+    send('=== 5s CHECK ===');
+    send('MP events: time=' + mpEvents.time + ' error=' + mpEvents.error + ' complete=' + mpEvents.complete + ' watchingLog=' + mpEvents.watchingLog + ' other=' + mpEvents.other);
+    if (mpEvents.time > 0) {
+      send('PLAYBACK DETECTED at 5s');
+      if (lastTimeEvent) send('last time: currentTime=' + lastTimeEvent.currentTime + ' duration=' + lastTimeEvent.duration);
+    } else if (mpEvents.error > 0) {
+      send('*** PLAYER ERROR at 5s ***');
+      for (var e = 0; e < mpErrors.length; e++) send('MP_ERR[' + e + ']: ' + mpErrors[e]);
+    } else {
+      send('*** NO MEGAPLAY EVENTS AT 5s ***');
     }
+    send('wrapper-level media requests (same-origin only): ' + mediaRequests.length);
   }, 5000);
 
   setTimeout(function() {
-    send('=== 12s NET CHECK ===');
-    send('total media requests: ' + mediaRequests.length);
-    for (var j = 0; j < Math.min(mediaRequests.length, 20); j++) {
-      send('REQ[' + j + ']: ' + mediaRequests[j]);
+    send('=== 12s CHECK ===');
+    send('MP events: time=' + mpEvents.time + ' error=' + mpEvents.error + ' complete=' + mpEvents.complete + ' watchingLog=' + mpEvents.watchingLog + ' other=' + mpEvents.other);
+    if (lastTimeEvent) send('last time: currentTime=' + lastTimeEvent.currentTime + ' duration=' + lastTimeEvent.duration);
+    if (mpErrors.length > 0) {
+      send('=== MP ERRORS ===');
+      for (var e = 0; e < mpErrors.length; e++) send('MP_ERR[' + e + ']: ' + mpErrors[e]);
     }
-    if (mediaRequests.length === 0) {
-      send('*** STILL NO MEDIA REQUESTS AT 12s ***');
-      if (!window.MediaSource) {
-        send('DIAGNOSIS: No MediaSource API — HLS.js cannot function');
-      } else {
-        send('DIAGNOSIS: MediaSource exists but no media requested — player script error or getSources failure');
-      }
-    } else if (mediaRequests.some(function(u){ return /\.m3u8/i.test(u); }) && !mediaRequests.some(function(u){ return /\.(ts|m4s)/i.test(u); })) {
-      send('DIAGNOSIS: Manifest fetched but no segments — possible codec/MSE init failure');
+
+    send('=== DIAGNOSIS ===');
+    if (mpEvents.time > 0) {
+      send('CLASS-A: Video IS playing — MegaPlay sending time events');
+    } else if (mpEvents.error > 0) {
+      send('CLASS-B: MegaPlay player reported error(s) — see MP_ERR above');
+    } else if (mpEvents.watchingLog > 0) {
+      send('CLASS-C: watching-log but no time events — player loaded, video stuck');
+    } else {
+      send('CLASS-D: No MegaPlay events at all — player may not have initialized');
+      send('Possible causes: autoplay policy, getSources failure, or cross-origin restriction');
     }
   }, 12000);
+
+  setTimeout(function() {
+    send('=== 20s FINAL ===');
+    send('MP events: time=' + mpEvents.time + ' error=' + mpEvents.error + ' complete=' + mpEvents.complete + ' watchingLog=' + mpEvents.watchingLog + ' other=' + mpEvents.other);
+    if (lastTimeEvent) send('last time: currentTime=' + lastTimeEvent.currentTime + ' duration=' + lastTimeEvent.duration);
+    if (mpEvents.time === 0 && mpEvents.error === 0 && mpEvents.watchingLog === 0) {
+      send('*** 20s NO MEGAPLAY EVENTS — likely autoplay blocked or player script failed ***');
+    }
+  }, 20000);
 
   // === CREATE IFRAME ===
   var url = 'https://megaplay.buzz/stream/mal/' + encodeURIComponent(id) + '/' + encodeURIComponent(ep) + '/' + encodeURIComponent(mode);
@@ -121,6 +194,8 @@ iframe{width:100%;height:100%;border:0;display:block}
   iframe.src = url;
   iframe.allowFullscreen = true;
   iframe.setAttribute('scrolling', 'no');
+
+  send('iframe allow="' + (iframe.getAttribute('allow') || '(none)') + '" sandbox="' + (iframe.getAttribute('sandbox') || '(none)') + '"');
 
   iframe.addEventListener('load', function() {
     send('iframe LOAD event');
